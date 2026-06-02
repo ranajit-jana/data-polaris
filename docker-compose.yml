@@ -1,0 +1,18 @@
+services:
+  polaris:
+    image: apache/polaris:latest
+    container_name: polaris
+    ports:
+      - "8181:8181"
+    volumes:
+      - /tmp/polaris-warehouse:/tmp/polaris-warehouse
+    # Pre-configure root credentials so the demo scripts don't need log-parsing.
+    # Format: realm:clientId:clientSecret  (Quarkus env-var override)
+    environment:
+      POLARIS_BOOTSTRAP_CREDENTIALS: "default-realm:root:polaris-secret"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8181/q/health || curl -sf http://localhost:8181/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 15s

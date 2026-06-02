@@ -1,0 +1,24 @@
+[project]
+name = "data-polaris"
+version = "0.1.0"
+description = "Simulated data streaming into Apache Iceberg via Polaris REST catalog"
+requires-python = ">=3.11"
+dependencies = [
+    "pyiceberg[pyarrow]>=0.7.0",
+    "pyarrow>=14.0.0",
+    "requests>=2.31.0",
+    "faker>=20.0.0",
+    "pandas>=2.0.0",
+]
+
+[project.scripts]
+polaris-setup   = "data_polaris.setup_polaris:main"
+polaris-produce = "data_polaris.producer:main"
+polaris-read    = "data_polaris.reader:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/data_polaris"]

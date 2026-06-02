@@ -39,7 +39,109 @@ s3://warehouse/my_table/
 
 Every write creates a new **snapshot**. Old snapshots are retained, giving you time-travel queries for free.
 
-### 2. REST Catalog (the Iceberg spec)
+### 2. Why Parquet? (and why it beats CSV / JSON / Avro for analytics)
+
+Iceberg uses **Apache Parquet** as its default data file format. Understanding why helps explain many of the performance characteristics of a modern data lakehouse.
+
+#### Row-oriented vs. column-oriented storage
+
+The fundamental difference is how bytes are arranged on disk:
+
+```
+CSV / JSON / Avro  — ROW-oriented
+┌──────────────────────────────────────────────┐
+│ row 1:  sensor_01 | 2024-01-01 | 22.5 | 65.0 │
+│ row 2:  sensor_02 | 2024-01-01 | 19.3 | 70.1 │
+│ row 3:  sensor_03 | 2024-01-01 | 25.8 | 55.4 │
+│ ...                                          │
+└──────────────────────────────────────────────┘
+
+Parquet  — COLUMN-oriented
+┌──────────────────────────────────────────────┐
+│ sensor_id col:   sensor_01, sensor_02, ...   │
+│ ts col:          2024-01-01, 2024-01-01, ... │
+│ temperature col: 22.5, 19.3, 25.8, ...       │
+│ humidity col:    65.0, 70.1, 55.4, ...       │
+└──────────────────────────────────────────────┘
+```
+
+When you run `SELECT AVG(temperature) FROM readings`, a row-oriented format must read every byte of every row just to extract the one column you care about. Parquet reads only the temperature column bytes — everything else stays on disk.
+
+#### The five advantages in detail
+
+**1. Projection pushdown — read only the columns you need**
+
+Analytics queries rarely need all columns. A query touching 3 of 50 columns reads ~6% of the data with Parquet vs. 100% with CSV. This directly reduces I/O, cost (cloud storage egress), and query time.
+
+**2. Predicate pushdown — skip rows before reading them**
+
+Each Parquet file stores **column statistics** in its footer: the min and max value of every column in every row group (a chunk of ~128 MB of rows).
+
+```
+Parquet file footer (read first, ~few KB):
+  Row group 0:  temperature  min=18.1  max=28.4
+  Row group 1:  temperature  min=30.2  max=41.7
+  Row group 2:  temperature  min=15.0  max=22.9
+
+Query: WHERE temperature > 35
+  → skip row group 0  (max 28.4 < 35)
+  → read row group 1  (might contain matches)
+  → skip row group 2  (max 22.9 < 35)
+```
+
+Combined with Iceberg's manifest-level statistics, a single query can skip entire Parquet files before opening them.
+
+**3. Compression — columns compress far better than rows**
+
+Because all values in a column share the same data type and often similar magnitudes, compression algorithms achieve much higher ratios:
+
+| Format | Typical size for 1 M sensor rows |
+|---|---|
+| CSV (uncompressed) | ~85 MB |
+| CSV + gzip | ~22 MB |
+| Parquet (Snappy) | ~8 MB |
+| Parquet (ZSTD) | ~5 MB |
+
+Parquet also applies **encoding tricks** per column before compression:
+- **Dictionary encoding**: repeated strings like `"sensor_001"` stored once; rows store a small integer index.
+- **Delta encoding**: timestamps stored as differences (`+3s, +3s, +3s`) rather than full values.
+- **Run-length encoding (RLE)**: `sensor_001` repeated 1 000 times stored as `(sensor_001, 1000)`.
+
+These can reduce size by another 2–5× before the compression codec even runs.
+
+**4. Schema enforcement and evolution**
+
+Parquet files embed a full schema in their footer. Unlike CSV (which is just strings), every value has a declared type. Readers can detect mismatches immediately. And because each column is independent, adding a new nullable column is a backward-compatible change — old files simply return `null` for the new column.
+
+**5. Vectorized reads — modern CPUs love columnar data**
+
+Query engines like DuckDB, Spark, and Trino read Parquet in **column batches** (e.g. 4 096 values at a time) and process them with SIMD CPU instructions — the same operation applied to 8–16 values per clock cycle. This is impossible with row-oriented formats where each row may have a different memory layout.
+
+#### When NOT to use Parquet
+
+Parquet is optimised for **reads**, not individual-row writes. It is a poor choice for:
+- High-frequency single-row inserts (use a transactional DB instead)
+- Streaming records where you need millisecond read latency on the latest row
+- Data that changes in-place (Parquet files are immutable; updates create new files)
+
+Iceberg addresses the last two points: it manages a set of immutable Parquet files as snapshots and uses **merge-on-read** or **copy-on-write** strategies to handle updates and deletes at the table level.
+
+#### How Parquet, Iceberg, and Polaris fit together
+
+```
+Polaris          knows WHERE the table is, WHO can access it
+  │
+Iceberg          knows WHICH Parquet files form the current snapshot
+  │              handles schema, partitioning, time-travel, ACID commits
+  │
+Parquet          the actual bytes on disk — compressed, columnar,
+                 self-describing, engine-agnostic
+```
+
+Each layer is independently open-source and swappable: Iceberg also supports ORC and Avro data files; Polaris manages any Iceberg table regardless of its data file format.
+
+### 3. REST Catalog (the Iceberg spec)
+
 
 The **Iceberg REST Catalog spec** (sometimes called the "Iceberg REST API" or "REST catalog protocol") is an open HTTP standard published by the Apache Iceberg community. It defines a language-agnostic contract that any catalog server must implement, and any Iceberg-compatible client (Spark, Flink, PyIceberg, DuckDB, Trino…) can speak — without knowing anything about the catalog's internal implementation.
 
@@ -155,7 +257,7 @@ Polaris implements credential vending for AWS S3, Google Cloud Storage, and Azur
 
 Polaris implements this spec, so **any Iceberg-compatible engine works with it without modification**.
 
-### 3. Polaris-Specific Concepts
+### 4. Polaris-Specific Concepts
 
 Polaris adds a **management layer** on top of the Iceberg REST spec:
 
@@ -184,7 +286,7 @@ Polaris adds a **management layer** on top of the Iceberg REST spec:
 | **Catalog Role** | Fine-grained permissions on a catalog (e.g. `TABLE_READ`, `CATALOG_MANAGE_CONTENT`) |
 | **Grant** | Links a principal role to a catalog role, controlling what a principal can do |
 
-### 4. How Authentication Works
+### 5. How Authentication Works
 
 ```
 Client (PyIceberg / Spark / Flink)
@@ -204,7 +306,7 @@ Client (PyIceberg / Spark / Flink)
   All subsequent table operations use the Bearer token.
 ```
 
-### 5. How a Write Works End-to-End
+### 6. How a Write Works End-to-End
 
 ```
 Producer (Python / PyIceberg)
