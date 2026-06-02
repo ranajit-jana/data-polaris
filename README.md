@@ -373,24 +373,32 @@ cd data-polaris
 ### Step-by-Step (manual)
 
 ```bash
-# Start Polaris catalog server
-docker compose up -d
+# 1. Start MinIO + Polaris
+docker compose down && docker compose up -d
 
-# Install Python dependencies
+# 2. Sync Python dependencies
 uv sync
 
-# Bootstrap: create catalog, namespace, and table in Polaris
+# 3. Bootstrap catalog, namespace, table (run once)
 uv run polaris-setup
+```
 
-# Terminal A — start the streaming producer
+Once setup succeeds, open two terminals:
+
+```bash
+# Terminal A — stream sensor data
 uv run polaris-produce
 
-# Terminal B — read the table (single snapshot)
+# Terminal B — read the table
 uv run polaris-read
 
-# Terminal B — or watch it update live
+# or keep it live
 uv run polaris-read --watch
 ```
+
+MinIO console (to see the actual Parquet files on disk):
+
+→ http://localhost:9001 — login `minioadmin` / `minioadmin`
 
 ---
 
