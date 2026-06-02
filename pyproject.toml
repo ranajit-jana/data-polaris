@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Simulated data streaming into Apache Iceberg via Polaris REST catalog"
 requires-python = ">=3.11"
 dependencies = [
-    "pyiceberg[pyarrow]>=0.7.0",
+    "pyiceberg[pyarrow,s3fs]>=0.7.0",
     "pyarrow>=14.0.0",
     "requests>=2.31.0",
     "faker>=20.0.0",

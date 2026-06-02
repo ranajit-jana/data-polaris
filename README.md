@@ -434,6 +434,78 @@ The demo writes IoT sensor readings with this Iceberg schema:
 
 ---
 
+## Reading the Data
+
+### Via PyIceberg (recommended — reads all snapshots)
+
+```bash
+uv run polaris-read          # single read
+uv run polaris-read --watch  # poll every 5 s, shows new batches live
+```
+
+### Download a Parquet file and inspect it directly
+
+You can also download any `.parquet` file from the MinIO console (`http://localhost:9001`) and read it with Python:
+
+```python
+import pyarrow.parquet as pq
+
+path = "/path/to/00000-0-0efa7e5f-a5ef-44e8-8681-44f9d813fa55.parquet"
+
+# schema + stats
+meta = pq.read_metadata(path)
+print(f"Rows: {meta.num_rows}, Columns: {meta.num_columns}")
+
+# full data
+table = pq.read_table(path)
+print(table.to_pandas().to_string(index=False))
+```
+
+Or as a one-liner from the terminal:
+
+```bash
+uv run python -c "
+import pyarrow.parquet as pq
+import pandas as pd
+
+path = '/path/to/00000-0-0efa7e5f-a5ef-44e8-8681-44f9d813fa55.parquet'
+table = pq.read_table(path)
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+print(table.to_pandas().to_string(index=False))
+"
+```
+
+Sample output for one batch file (20 rows, `batch_id=6`):
+
+```
+ sensor_id                               ts  temperature  humidity  pressure  batch_id
+sensor_007 2026-06-02 07:52:40.926447+00:00        15.24     78.78   1001.99         6
+sensor_005 2026-06-02 07:52:40.926447+00:00        26.04     50.64   1012.14         6
+sensor_012 2026-06-02 07:52:40.926447+00:00        26.76     86.21   1004.66         6
+sensor_006 2026-06-02 07:52:40.926447+00:00        27.07     86.57   1020.45         6
+sensor_005 2026-06-02 07:52:40.926447+00:00        27.43     64.45   1023.36         6
+sensor_006 2026-06-02 07:52:40.926447+00:00        28.75     37.35    997.42         6
+sensor_012 2026-06-02 07:52:40.926447+00:00        15.02     41.64   1021.82         6
+sensor_019 2026-06-02 07:52:40.926447+00:00        28.82     86.26   1018.64         6
+sensor_009 2026-06-02 07:52:40.926447+00:00        23.03     45.68   1002.02         6
+sensor_014 2026-06-02 07:52:40.926447+00:00        30.31     47.66   1003.94         6
+sensor_012 2026-06-02 07:52:40.926447+00:00        26.14     53.91    997.04         6
+sensor_003 2026-06-02 07:52:40.926447+00:00        21.86     65.05   1004.49         6
+sensor_003 2026-06-02 07:52:40.926447+00:00        23.19     78.72   1002.58         6
+sensor_007 2026-06-02 07:52:40.926447+00:00        16.66     43.32   1003.93         6
+sensor_003 2026-06-02 07:52:40.926447+00:00        18.82     77.31   1023.72         6
+sensor_019 2026-06-02 07:52:40.926447+00:00        21.24     87.61    999.29         6
+sensor_016 2026-06-02 07:52:40.926447+00:00        17.32     56.66   1000.53         6
+sensor_005 2026-06-02 07:52:40.926447+00:00        24.32     54.16   1001.86         6
+sensor_003 2026-06-02 07:52:40.926447+00:00        27.45     32.58   1018.38         6
+sensor_004 2026-06-02 07:52:40.926447+00:00        23.22     35.17   1003.08         6
+```
+
+Each Parquet file in the `data/` folder corresponds to one `table.append()` call — one Iceberg snapshot. Notice that all rows in a file share the same `ts` and `batch_id`, since an entire batch is written atomically. Reading via PyIceberg merges all snapshot files into a single unified table view.
+
+---
+
 ## How the Code Maps to Polaris Concepts
 
 | Script | What it does in Polaris |
